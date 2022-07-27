@@ -1,0 +1,9 @@
+DELETE FROM `es` WHERE `eweight` = 1;
+
+ALTER TABLE `vs` RENAME TO `vs_old`;
+CREATE TABLE `vs` (
+  `seq` INTEGER PRIMARY KEY AUTOINCREMENT,
+  `id` CHAR(64) UNIQUE NOT NULL
+);
+INSERT INTO `vs` (`id`) SELECT `from` FROM `es` UNION SELECT `to` FROM `es`;
+DROP TABLE `vs_old`;

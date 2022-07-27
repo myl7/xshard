@@ -1,0 +1,7 @@
+{
+  "shard_num": 2,
+  "node_num": 4,
+  "block_size": 1,
+  "coordinator_addr": "54.204.219.65:8000",
+  "leader_addrs": ["34.207.186.187:8000", "54.146.24.134:8000"]
+}
