@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/myl7/mingchain/pkg"
-	"github.com/niclabs/tcrsa"
+	"github.com/myl7/tcrsa"
 )
 
 func main() {

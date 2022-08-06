@@ -4,7 +4,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 
-	"github.com/niclabs/tcrsa"
+	"github.com/myl7/tcrsa"
 )
 
 type Config struct {

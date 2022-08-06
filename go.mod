@@ -3,7 +3,7 @@ module github.com/myl7/mingchain
 go 1.18
 
 require (
-	github.com/niclabs/tcrsa v0.0.5
+	github.com/myl7/tcrsa v0.0.5-1
 	github.com/wealdtech/go-merkletree v1.0.0
 )
 

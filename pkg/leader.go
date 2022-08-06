@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/myl7/mingchain/third_party/pbft"
-	"github.com/niclabs/tcrsa"
+	"github.com/myl7/tcrsa"
 )
 
 type LeaderAddrBook struct {
