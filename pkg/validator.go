@@ -64,7 +64,8 @@ func (v *Validator) Handle(conn net.Conn) {
 
 	err := d.Decode(&msg)
 	if err != nil {
-		panic(err)
+		fmt.Println("Failed to decode")
+		return
 	}
 
 	fmt.Printf("Handling %s msg\n", msg.Type)

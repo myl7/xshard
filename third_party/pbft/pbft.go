@@ -115,6 +115,7 @@ func (p *Pbft) HandlePrepare(pre *Prepare, broadcast func(string, any)) {
 	} else if !p.RsaVerySignWithSha256(digestByte, pre.Sign, MessageNodePubKey) {
 		fmt.Println("节点签名验证失败！,拒绝执行commit广播")
 	} else {
+		p.lock.Lock()
 		p.setPrePareConfirmMap(pre.Digest, pre.NodeID, true)
 		count := 0
 		for range p.prePareConfirmCount[pre.Digest] {
@@ -128,7 +129,6 @@ func (p *Pbft) HandlePrepare(pre *Prepare, broadcast func(string, any)) {
 			specifiedCount = (p.node.NodeNum / 3 * 2) - 1
 		}
 		//如果节点至少收到了2f个prepare的消息（包括自己）,并且没有进行过commit广播，则进行commit广播
-		p.lock.Lock()
 		//获取消息源节点的公钥，用于数字签名验证
 		if count >= specifiedCount && !p.isCommitBordcast[pre.Digest] {
 			fmt.Println("本节点已收到至少2f个节点(包括本地节点)发来的Prepare信息 ...")
@@ -158,13 +158,13 @@ func (p *Pbft) HandleCommit(c *Commit, reply func(Message)) {
 	} else if !p.RsaVerySignWithSha256(digestByte, c.Sign, MessageNodePubKey) {
 		fmt.Println("节点签名验证失败！,拒绝将信息持久化到本地消息池")
 	} else {
+		p.lock.Lock()
 		p.setCommitConfirmMap(c.Digest, c.NodeID, true)
 		count := 0
 		for range p.commitConfirmCount[c.Digest] {
 			count++
 		}
 		//如果节点至少收到了2f+1个commit消息（包括自己）,并且节点没有回复过,并且已进行过commit广播，则提交信息至本地消息池，并reply成功标志至客户端！
-		p.lock.Lock()
 		if count >= p.node.NodeNum/3*2 && !p.isReply[c.Digest] && p.isCommitBordcast[c.Digest] {
 			fmt.Println("本节点已收到至少2f + 1 个节点(包括本地节点)发来的Commit信息 ...")
 			msg := p.messagePool[c.Digest].Message
@@ -187,9 +187,6 @@ func (p *Pbft) sequenceIDAdd() {
 
 //为多重映射开辟赋值
 func (p *Pbft) setPrePareConfirmMap(val, val2 string, b bool) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
 	if _, ok := p.prePareConfirmCount[val]; !ok {
 		p.prePareConfirmCount[val] = make(map[string]bool)
 	}
@@ -198,9 +195,6 @@ func (p *Pbft) setPrePareConfirmMap(val, val2 string, b bool) {
 
 //为多重映射开辟赋值
 func (p *Pbft) setCommitConfirmMap(val, val2 string, b bool) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
 	if _, ok := p.commitConfirmCount[val]; !ok { //TODO
 		p.commitConfirmCount[val] = make(map[string]bool)
 	}

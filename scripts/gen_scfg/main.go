@@ -36,6 +36,11 @@ func main() {
 	}
 
 	nodeAddrs := strings.Split(*nodeAddrsS, ",")
+	for i, nodeAddr := range nodeAddrs {
+		if strings.Index(nodeAddr, ":") == -1 {
+			nodeAddrs[i] = nodeAddr + ":8000"
+		}
+	}
 
 	var keys []rsa.PrivateKey
 	for i := 0; i < *nodeNum; i++ {

@@ -13,7 +13,6 @@ import (
 func main() {
 	shardID := flag.Int("shard-id", -1, "Shard ID")
 	nodeID := flag.Int("node-id", 0, "Node ID")
-	port := flag.Int("port", 0, "Listening port")
 	gCfgPath := flag.String("gcfg-path", "", "Global config path")
 	sCfgPath := flag.String("scfg-path", "", "Shard-specified config path")
 	flag.Parse()
@@ -23,9 +22,6 @@ func main() {
 	}
 	if *nodeID == 0 {
 		panic("node-id is required")
-	}
-	if *port == 0 {
-		panic("port is required")
 	}
 	if *gCfgPath == "" {
 		panic("gcfg-path is required")
@@ -51,7 +47,7 @@ func main() {
 
 	validatorCfg := pkg.ValidatorConfig{
 		NodeID:      *nodeID,
-		Port:        *port,
+		Port:        8000,
 		PrivKey:     sCfg.PrivKeys[*nodeID],
 		PubKey:      sCfg.PrivKeys[*nodeID].PublicKey,
 		PTSKeyShare: sCfg.PTSKeyShares[*nodeID],

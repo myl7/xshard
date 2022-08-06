@@ -17,14 +17,15 @@ type Msg struct {
 }
 
 type Tx struct {
-	BlockID   uint64
-	TxHash    string
-	From      string
-	FromShard int
-	To        string
-	ToShard   int
-	Value     uint64
-	IsSubTx   bool
+	BlockID         uint64
+	TxHash          string
+	From            string
+	FromShard       int
+	To              string
+	ToShard         int
+	Value           uint64
+	IsSubTx         bool
+	InPoolTimestamp int64
 }
 
 type Block struct {
@@ -34,6 +35,10 @@ type Block struct {
 }
 
 func (b *Block) GenTxHash() {
+	if len(b.Txes) == 0 {
+		return
+	}
+
 	txHashes := make([][]byte, len(b.Txes))
 	for i, tx := range b.Txes {
 		txHashes[i] = []byte(tx.TxHash)
@@ -61,6 +66,7 @@ type CrossShardBlock struct {
 
 func init() {
 	gob.Register(Tx{})
+	gob.Register([]Tx{})
 	gob.Register(Block{})
 	gob.Register(BlockResult{})
 	gob.Register(CrossShardBlock{})

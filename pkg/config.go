@@ -11,6 +11,7 @@ type Config struct {
 	ShardNum        int      `json:"shard_num"`
 	NodeNum         int      `json:"node_num"`
 	BlockSize       int      `json:"block_size"`
+	BlockInterval   int      `json:"block_interval"`
 	CoordinatorAddr string   `json:"coordinator_addr"`
 	LeaderAddrs     []string `json:"leader_addrs"`
 }

@@ -39,3 +39,6 @@ go.work
 
 # Generated binary
 *.bin
+
+# Dataset
+/data/**/*.csv

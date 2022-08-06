@@ -29,10 +29,6 @@ func (p *TxPool) SelectTxesForBlock() []Tx {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if len(p.waitingSubPool) < Cfg.BlockSize {
-		return nil
-	}
-
 	var txes []Tx
 	size := 0
 	for k, tx := range p.waitingSubPool {

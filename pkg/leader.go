@@ -6,8 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
-	"io"
+	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,11 +39,13 @@ type Leader struct {
 	readyPool       TxPool
 	blockchain      []Block
 	blockchainMutex sync.Mutex
-	packBlockChan   chan struct{}
+	packBlockChan   chan bool
 	pbft            pbft.Pbft
 	replyPool       map[string][]*tcrsa.SigShare
 	replyPoolMutex  sync.Mutex
 	repliedPool     map[string]bool
+	hasStarted      bool
+	hasStartedMutex sync.Mutex
 }
 
 func NewLeader(c LeaderConfig, pc pbft.NodeInfo) *Leader {
@@ -50,7 +53,7 @@ func NewLeader(c LeaderConfig, pc pbft.NodeInfo) *Leader {
 		C:             c,
 		waitingPool:   *NewTxPool(),
 		readyPool:     *NewTxPool(),
-		packBlockChan: make(chan struct{}),
+		packBlockChan: make(chan bool),
 		replyPool:     make(map[string][]*tcrsa.SigShare),
 		repliedPool:   make(map[string]bool),
 		pbft:          *pbft.NewPBFT(pc),
@@ -81,12 +84,8 @@ func (l *Leader) Handle(conn net.Conn) {
 
 	err := d.Decode(&msg)
 	if err != nil {
-		if err == io.ErrUnexpectedEOF {
-			fmt.Println("Client disconnected")
-			return
-		}
-
-		panic(err)
+		fmt.Println("Failed to decode")
+		return
 	}
 
 	fmt.Printf("Handling %s msg\n", msg.Type)
@@ -108,21 +107,29 @@ func (l *Leader) Handle(conn net.Conn) {
 }
 
 func (l *Leader) HandleRequest(msg Msg) {
-	tx := msg.Data.(Tx)
+	l.hasStartedMutex.Lock()
+	if !l.hasStarted {
+		l.hasStarted = true
+		l.packBlockChan <- true
+	}
+	l.hasStartedMutex.Unlock()
 
-	if tx.FromShard == l.C.LeaderID {
-		if tx.ToShard == l.C.LeaderID || tx.IsSubTx {
-			size := l.readyPool.Add(tx)
-			if size >= Cfg.BlockSize {
-				l.packBlockChan <- struct{}{}
+	txes := msg.Data.([]Tx)
+
+	for _, tx := range txes {
+		if tx.FromShard == l.C.LeaderID {
+			if tx.ToShard == l.C.LeaderID || tx.IsSubTx {
+				tx.InPoolTimestamp = time.Now().UnixNano()
+				l.readyPool.Add(tx)
+			} else {
+				fmt.Println("Received unexpected tx which should be sent to another shard")
 			}
+		} else if tx.ToShard == l.C.LeaderID {
+			tx.InPoolTimestamp = time.Now().UnixNano()
+			l.waitingPool.Add(tx)
 		} else {
 			fmt.Println("Received unexpected tx which should be sent to another shard")
 		}
-	} else if tx.ToShard == l.C.LeaderID {
-		l.waitingPool.Add(tx)
-	} else {
-		fmt.Println("Received unexpected tx which should be sent to another shard")
 	}
 }
 
@@ -177,10 +184,23 @@ func (l *Leader) HandleCommit(msg Msg) {
 
 func (l *Leader) PackBlock() {
 	for {
-		<-l.packBlockChan
-		fmt.Println("Packing new block")
+		first := <-l.packBlockChan
 
-		txes := l.readyPool.SelectTxesForBlock()
+		log.Println("Packing new block")
+
+		var txes []Tx
+		if first {
+			txes = []Tx{}
+		} else {
+			for {
+				txes = l.readyPool.SelectTxesForBlock()
+				if len(txes) > 0 {
+					break
+				}
+				time.Sleep(time.Second * time.Duration(Cfg.BlockInterval))
+			}
+		}
+
 		block := Block{
 			Txes:   txes,
 			PubKey: l.C.PubKey,
@@ -226,10 +246,26 @@ func (l *Leader) HandleReply(msg Msg) {
 	}
 
 	l.blockchainMutex.Lock()
+	onChainTimestamp := time.Now().UnixNano()
 	l.blockchain = append(l.blockchain, blockRes.Block)
 	l.blockchainMutex.Unlock()
 
+	reportMsg := make(map[string]string)
+	reportMsg["type"] = "on_chain"
+	reportMsg["shard"] = strconv.Itoa(l.C.LeaderID)
+	reportMsg["block_hash"] = blockRes.Block.TxHash
+	num, crossNum := countCrossTxInBlock(blockRes.Block)
+	reportMsg["tx_num"] = strconv.Itoa(num)
+	reportMsg["cross_tx_num"] = strconv.Itoa(crossNum)
+	reportMsg["timestamp"] = strconv.FormatInt(onChainTimestamp, 10)
+	normalDelay, crossDelay := countDelayInBlock(blockRes.Block, onChainTimestamp)
+	reportMsg["normal_delay_total"] = strconv.FormatInt(normalDelay, 10)
+	reportMsg["cross_delay_total"] = strconv.FormatInt(crossDelay, 10)
+	go reportCoordinator(reportMsg)
+
 	l.readyPool.RemoveTxesForBlock(blockRes.Block.Txes)
+
+	l.packBlockChan <- false
 
 	csShards := make(map[int]bool)
 	for _, tx := range blockRes.Block.Txes {
@@ -300,10 +336,7 @@ func (l *Leader) HandleCrossShard(msg Msg) {
 
 	removedTxes := l.waitingPool.RemoveWaitingTxesForBlock(csTxes)
 	for _, tx := range removedTxes {
-		size := l.readyPool.Add(tx)
-		if size >= Cfg.BlockSize {
-			l.packBlockChan <- struct{}{}
-		}
+		l.readyPool.Add(tx)
 	}
 }
 

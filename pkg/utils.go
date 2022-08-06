@@ -5,10 +5,12 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/gob"
+	"encoding/json"
 	"encoding/pem"
 	"io/ioutil"
 	"net"
 	"net/http"
+	"time"
 )
 
 // Ser/De
@@ -58,6 +60,8 @@ func PbftRsaPubEnc(pub rsa.PublicKey) []byte {
 // Network
 
 func TcpSend(addr string, b []byte) {
+	time.Sleep(time.Millisecond * 120)
+
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		panic(err)
@@ -96,4 +100,38 @@ func httpGet(urlS string) []byte {
 	}
 
 	return b
+}
+
+func reportCoordinator(msg any) {
+	b, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
+	TcpSend(Cfg.CoordinatorAddr, b)
+}
+
+func countCrossTxInBlock(block Block) (int, int) {
+	num := 0
+	crossNum := 0
+	for _, tx := range block.Txes {
+		num++
+		if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+			crossNum++
+		}
+	}
+	return num, crossNum
+}
+
+func countDelayInBlock(block Block, onChainTimestamp int64) (int64, int64) {
+	var normalDelay int64
+	var crossDelay int64
+	for _, tx := range block.Txes {
+		if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+			crossDelay += onChainTimestamp - tx.InPoolTimestamp
+		} else {
+			normalDelay += onChainTimestamp - tx.InPoolTimestamp
+		}
+	}
+	return normalDelay, crossDelay
 }
