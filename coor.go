@@ -306,6 +306,7 @@ type TcKeys struct {
 
 type tmpCoorNode struct {
 	PublicInfo
+	// REFACTOR: Use chan buf to store
 	AddrChan chan string
 	N        int
 	i        int

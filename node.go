@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/gob"
 	"flag"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	pbft "github.com/myl7/pbft/pkg"
 	"github.com/myl7/tcrsa"
 	log "github.com/sirupsen/logrus"
@@ -202,7 +205,27 @@ func (nd *Node) handleRequest(msg Msg) {
 }
 
 func (nd *Node) handleReply(msg Msg) {
-	br := msg.Body.(BlockResult)
+	reMsg := msg.Body.(pbft.WithSig[pbft.Reply])
+	re := reMsg.Body
+
+	// Check if sig is valid
+	key := nd.NodePubKeys[nd.ShardID][re.Replica]
+	h := sha256.New()
+	err := gob.NewEncoder(h).Encode(re)
+	if err != nil {
+		panic(err)
+	}
+
+	err = rsa.VerifyPKCS1v15(key, crypto.SHA256, h.Sum(nil), reMsg.Sig)
+	if err != nil {
+		panic(err)
+	}
+
+	if re.View != 0 {
+		log.Fatal("invalid view")
+	}
+
+	br := re.Result.(BlockResult)
 
 	var sigs []*tcrsa.SigShare
 	done := func() bool {
@@ -248,8 +271,8 @@ func (nd *Node) handleReply(msg Msg) {
 		}
 	}
 
-	h := sha256.New()
-	err := gob.NewEncoder(h).Encode(br.Block)
+	h = sha256.New()
+	err = gob.NewEncoder(h).Encode(br.Block)
 	if err != nil {
 		panic(err)
 	}
@@ -377,7 +400,17 @@ func (nd *Node) PackBlock() {
 	}
 }
 
-func NewNode() *CoorNode {
+func (nd *Node) SendReady() {
+	tcpSend(nd.CoorAddr, Msg{
+		Head: []string{"setup", "ready"},
+		Body: SetupReady{
+			ShardID:   nd.ShardID,
+			InShardID: nd.InShardID,
+		},
+	})
+}
+
+func NewNode() *Node {
 	coorAddr := flag.String("coorAddr", "", "coordinator listen addr")
 	flag.Parse()
 
@@ -387,6 +420,172 @@ func NewNode() *CoorNode {
 		*coorAddr += ":8000"
 	}
 
-	// TODO
-	return nil
+	configChan := make(chan *NodeConfig, 1)
+	tmpNd := &tmpNode{
+		configChan: configChan,
+	}
+	go tcpSend(*coorAddr, Msg{
+		Head: []string{"setup", "addr"},
+		Body: "",
+	})
+	tmpNd.listen()
+
+	config := <-configChan
+
+	log.Info("node setup config ok")
+
+	replicaPubkeys := make([][]byte, len(config.NodeAddrs[0]))
+	for i, key := range config.NodePubKeys[config.ShardID] {
+		replicaPubkeys[i] = pbft.GobEnc(key)
+	}
+
+	db, err := sql.Open("sqlite3", "db.sqlite")
+	if err != nil {
+		panic(err)
+	}
+	pbft.InitDB(db)
+
+	pbft := &pbft.Handler{
+		StateMachine: pbft.StateMachine{
+			State: nil,
+			Transform: func(state any, op any) (nextState any, res any) {
+				block := op.(Block)
+
+				h := sha256.New()
+				err := gob.NewEncoder(h).Encode(block)
+				if err != nil {
+					panic(err)
+				}
+
+				blockBPKCS1, err := tcrsa.PrepareDocumentHash(config.TcKeyMetas[config.ShardID].PublicKey.Size(), crypto.SHA256, h.Sum(nil))
+				if err != nil {
+					panic(err)
+				}
+
+				sigShare, err := config.TcKeyShare.Sign(blockBPKCS1, crypto.SHA256, config.TcKeyMetas[config.ShardID])
+				if err != nil {
+					panic(err)
+				}
+
+				br := BlockResult{
+					Block: block,
+					Sig:   sigShare,
+				}
+				return state, br
+			},
+		},
+		NetFuncSet: pbft.NetFuncSet{
+			NetSend: func(id int, msg any) {
+				log.Fatal("no request forwarding to primary")
+			},
+			NetReply: func(client string, msg any) {
+				tcpSend(client, Msg{
+					Head: []string{"reply"},
+					Body: msg,
+				})
+			},
+			NetBroadcast: func(id int, msg any) {
+				gossipID := uuid.NewString()
+				var msgType string
+				switch msg.(type) {
+				case pbft.PrePrepareMsg:
+					msgType = "preprepare"
+				case pbft.WithSig[pbft.Prepare]:
+					msgType = "prepare"
+				case pbft.WithSig[pbft.Commit]:
+					msgType = "commit"
+				}
+				m := Msg{
+					Head: []string{"gossip", gossipID, "pbft", msgType},
+					Body: msg,
+				}
+				for _, nid := range config.NeighborIDs {
+					tcpSend(config.NodeAddrs[config.ShardID][nid], m)
+				}
+			},
+		},
+		GetPubkeyFuncSet: pbft.GetPubkeyFuncSet{
+			GetClientPubkey: func(client string) []byte {
+				return pbft.GobEnc(config.NodePubKeys[config.ShardID][0])
+			},
+			ReplicaPubkeys: replicaPubkeys,
+		},
+		DigestFuncSet: pbft.DigestFuncSet{
+			Hash: func(data any) []byte {
+				h := sha256.New()
+				err := gob.NewEncoder(h).Encode(data)
+				if err != nil {
+					panic(err)
+				}
+				return h.Sum(nil)
+			},
+		},
+		PubkeyFuncSet: pbft.PubkeyFuncSet{
+			PubkeySign: func(digest []byte, privkey []byte) []byte {
+				sig, err := rsa.SignPKCS1v15(rand.Reader, config.PrivKey, crypto.SHA256, digest)
+				if err != nil {
+					panic(err)
+				}
+				return sig
+			},
+			PubkeyVerify: func(sig []byte, digest []byte, pubkey []byte) error {
+				var key *rsa.PublicKey
+				pbft.GobDec(pubkey, &key)
+				return rsa.VerifyPKCS1v15(key, crypto.SHA256, digest, sig)
+			},
+		},
+		F:              len(config.NodeAddrs[0]) / 3,
+		ID:             config.InShardID,
+		Privkey:        pbft.GobEnc(config.PrivKey),
+		DB:             db,
+		DBSerdeFuncSet: *pbft.NewDBSerdeFuncSetDefault(),
+	}
+	pbft.Init()
+
+	return &Node{
+		NodeConfig:     *config,
+		PBFT:           pbft,
+		gossipFwdedMap: make(map[string]bool),
+		packBlockChan:  make(chan bool),
+		waitingPool:    make(map[string]*TxWithMetrics),
+		readyPool:      make(map[string]*TxWithMetrics),
+		processingPool: make(map[string]*TxWithMetrics),
+		replyMap:       make(map[string][]*tcrsa.SigShare),
+		repliedMap:     make(map[string]bool),
+	}
+}
+
+type tmpNode struct {
+	configChan chan *NodeConfig
+}
+
+func (nd *tmpNode) listen() {
+	l, err := net.Listen("tcp", ":8000")
+	if err != nil {
+		panic(err)
+	}
+	defer l.Close()
+
+	c, err := l.Accept()
+	if err != nil {
+		panic(err)
+	}
+	defer c.Close()
+
+	d := gob.NewDecoder(c)
+	var msg Msg
+	err = d.Decode(&msg)
+	if err != nil {
+		// There will be wired spiders following the route to access the listener
+		log.WithField("remoteAddr", c.RemoteAddr()).Warn("invalid client")
+		return
+	}
+
+	if msg.Head[0] != "setup" || msg.Head[1] != "config" {
+		log.WithField("head", msg.Head).Warn("invalid setup config msg")
+		return
+	}
+
+	config := msg.Body.(NodeConfig)
+	nd.configChan <- &config
 }

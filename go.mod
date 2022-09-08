@@ -3,6 +3,8 @@ module github.com/myl7/mingchain
 go 1.19
 
 require (
+	github.com/google/uuid v1.3.0
+	github.com/mattn/go-sqlite3 v1.14.15
 	github.com/myl7/pbft v0.2.5
 	github.com/myl7/tcrsa v0.0.5-1
 	github.com/sirupsen/logrus v1.9.0

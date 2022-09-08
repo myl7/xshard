@@ -64,8 +64,10 @@ type SetupReady struct {
 func init() {
 	gob.Register(log.Fields{})
 	gob.Register(pbft.PrePrepareMsg{})
+	gob.Register(pbft.WithSig[pbft.Request]{})
 	gob.Register(pbft.WithSig[pbft.Prepare]{})
 	gob.Register(pbft.WithSig[pbft.Commit]{})
+	gob.Register(pbft.WithSig[pbft.Reply]{})
 	gob.Register(Block{})
 	gob.Register(BlockResult{})
 	gob.Register(CrossShardBlockResult{})
