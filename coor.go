@@ -89,7 +89,7 @@ func (nd *CoorNode) handleSetupReady(msg Msg) {
 		}
 	}
 	if done {
-		go nd.SendTxs()
+		go nd.sendTxs()
 	}
 }
 
@@ -114,7 +114,7 @@ func (nd *CoorNode) SetupNodes() {
 	}
 }
 
-func (nd *CoorNode) SendTxs() {
+func (nd *CoorNode) sendTxs() {
 	// TODO
 }
 
