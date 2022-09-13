@@ -2,6 +2,7 @@ package mingchain
 
 import (
 	"encoding/gob"
+	"io"
 
 	pbft "github.com/myl7/pbft/pkg"
 	"github.com/myl7/tcrsa"
@@ -63,14 +64,27 @@ type SetupReady struct {
 
 func init() {
 	gob.Register(log.Fields{})
+	gob.NewEncoder(io.Discard).Encode(log.Fields{})
 	gob.Register(pbft.PrePrepareMsg{})
+	gob.NewEncoder(io.Discard).Encode(pbft.PrePrepareMsg{})
 	gob.Register(pbft.WithSig[pbft.Request]{})
+	gob.NewEncoder(io.Discard).Encode(pbft.WithSig[pbft.Request]{})
 	gob.Register(pbft.WithSig[pbft.Prepare]{})
+	gob.NewEncoder(io.Discard).Encode(pbft.WithSig[pbft.Prepare]{})
 	gob.Register(pbft.WithSig[pbft.Commit]{})
+	gob.NewEncoder(io.Discard).Encode(pbft.WithSig[pbft.Commit]{})
 	gob.Register(pbft.WithSig[pbft.Reply]{})
+	gob.NewEncoder(io.Discard).Encode(pbft.WithSig[pbft.Reply]{})
+	gob.Register([]Tx{})
+	gob.NewEncoder(io.Discard).Encode([]Tx{})
 	gob.Register(Block{})
+	gob.NewEncoder(io.Discard).Encode(Block{})
 	gob.Register(BlockResult{})
+	gob.NewEncoder(io.Discard).Encode(BlockResult{})
 	gob.Register(CrossShardBlockResult{})
+	gob.NewEncoder(io.Discard).Encode(CrossShardBlockResult{})
 	gob.Register(NodeConfig{})
+	gob.NewEncoder(io.Discard).Encode(NodeConfig{})
 	gob.Register(SetupReady{})
+	gob.NewEncoder(io.Discard).Encode(SetupReady{})
 }

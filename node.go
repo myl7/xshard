@@ -9,6 +9,7 @@ import (
 	"encoding/gob"
 	"flag"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -50,10 +51,11 @@ type TxWithMetrics struct {
 
 type Node struct {
 	NodeConfig
-	PBFT           *pbft.Handler
-	gossipFwdedMap map[string]bool
-	hasStarted     bool
-	hasStartedLock sync.Mutex
+	PBFT               *pbft.Handler
+	gossipFwdedMap     map[string]bool
+	gossipFwdedMapLock sync.Mutex
+	hasStarted         bool
+	hasStartedLock     sync.Mutex
 	// Leader only fields
 	packBlockChan chan bool
 	// Lock them following the list order
@@ -96,65 +98,89 @@ func (nd *Node) handle(c net.Conn) {
 		return
 	}
 
-	nd.handleMsg(msg)
+	nd.handleMsg(msg, c)
 }
 
-func (nd *Node) handleMsg(msg Msg) {
+func (nd *Node) handleMsg(msg Msg, c net.Conn) {
 	switch msg.Head[0] {
 	case "gossip":
-		nd.handleGossip(msg)
+		nd.handleGossip(msg, c)
 	case "pbft":
 		nd.handlePBFT(msg)
-	default:
+	case "request":
 		if nd.InShardID == 0 {
-			nd.handleMsgAsLeader(msg)
+			nd.handleRequest(msg)
 		} else {
 			log.WithField("head", msg.Head).Error("invalid msg")
 		}
-	}
-}
-
-func (nd *Node) handleMsgAsLeader(msg Msg) {
-	switch msg.Head[0] {
-	case "request":
-		nd.handleRequest(msg)
 	case "reply":
-		nd.handleReply(msg)
+		if nd.InShardID == 0 {
+			nd.handleReply(msg)
+		} else {
+			log.WithField("head", msg.Head).Error("invalid msg")
+		}
 	case "crossshard":
-		nd.handleCrossShard(msg)
+		if nd.InShardID == 0 {
+			nd.handleCrossShard(msg)
+		} else {
+			log.WithField("head", msg.Head).Error("invalid msg")
+		}
 	default:
 		log.WithField("head", msg.Head).Error("invalid msg")
 	}
 }
 
-func (nd *Node) handleGossip(msg Msg) {
+func (nd *Node) handleGossip(msg Msg, c net.Conn) {
 	id := msg.Head[1]
-	if nd.gossipFwdedMap[id] {
-		return
-	}
-	nd.gossipFwdedMap[id] = true
+	func() {
+		nd.gossipFwdedMapLock.Lock()
+		defer nd.gossipFwdedMapLock.Unlock()
+
+		if nd.gossipFwdedMap[id] {
+			return
+		}
+		nd.gossipFwdedMap[id] = true
+	}()
 
 	go func() {
 		// Forward
 		for _, nid := range nd.NeighborIDs {
-			tcpSend(nd.NodeAddrs[nd.ShardID][nid], msg)
+			if !checkHostEq(nd.NodeAddrs[nd.ShardID][nid], c.RemoteAddr().String()) {
+				tcpSend(nd.NodeAddrs[nd.ShardID][nid], msg)
+			}
 		}
 	}()
 
 	msg.Head = msg.Head[2:]
-	nd.handleMsg(msg)
+	nd.handleMsg(msg, c)
 }
 
 func (nd *Node) handlePBFT(msg Msg) {
 	switch msg.Head[1] {
 	case "preprepare":
-		ppMsg := msg.Body.(pbft.PrePrepareMsg)
-		nd.PBFT.HandlePrePrepare(ppMsg)
+		if nd.InShardID != 0 {
+			ppMsg := msg.Body.(pbft.PrePrepareMsg)
+			log.WithFields(log.Fields{
+				"txNum": len(ppMsg.Req.Body.Op.(Block).Txs),
+				"seq":   ppMsg.PP.Body.Seq,
+			}).Debug("node handle preprepare msg")
+			nd.PBFT.HandlePrePrepare(ppMsg)
+		} else {
+			log.WithField("head", msg.Head).Debug("ignored msg")
+		}
 	case "prepare":
 		pMsg := msg.Body.(pbft.WithSig[pbft.Prepare])
+		log.WithFields(log.Fields{
+			"from": pMsg.Body.Replica,
+			"seq":  pMsg.Body.Seq,
+		}).Debug("node handle prepare msg")
 		nd.PBFT.HandlePrepare(pMsg)
 	case "commit":
 		cMsg := msg.Body.(pbft.WithSig[pbft.Commit])
+		log.WithFields(log.Fields{
+			"from": cMsg.Body.Replica,
+			"seq":  cMsg.Body.Seq,
+		}).Debug("node handle commit msg")
 		nd.PBFT.HandleCommit(cMsg)
 	default:
 		log.WithField("head", msg.Head).Error("invalid msg")
@@ -173,6 +199,9 @@ func (nd *Node) handleRequest(msg Msg) {
 	}()
 
 	txs := msg.Body.([]Tx)
+
+	log.WithField("txNum", len(txs)).Debug("node handle request msg")
+
 	for _, tx := range txs {
 		if tx.FromShard == nd.ShardID {
 			if tx.ToShard == nd.ShardID || tx.IsSubTx {
@@ -207,6 +236,8 @@ func (nd *Node) handleRequest(msg Msg) {
 func (nd *Node) handleReply(msg Msg) {
 	reMsg := msg.Body.(pbft.WithSig[pbft.Reply])
 	re := reMsg.Body
+
+	log.WithField("from", re.Replica).Debug("node handle reply msg")
 
 	// Check if sig is valid
 	key := nd.NodePubKeys[nd.ShardID][re.Replica]
@@ -245,14 +276,26 @@ func (nd *Node) handleReply(msg Msg) {
 			nd.repliedMap[string(br.Block.Hash)] = true
 			return true
 		}
+
+		log.WithField("left", int(nd.TcKeyMetas[nd.ShardID].K)-len(sigs)).Debug("node handle reply msg not enough")
 		return false
 	}()
 	if !done {
 		return
 	}
 
+	log.Debug("node have enough replies")
+
 	// No need to store the blockchain since we do not use it
-	// TODO: Report
+
+	go tcpSend(nd.CoorAddr, Msg{
+		Head: []string{"report", "chain"},
+		Body: log.Fields{
+			"shardID":   nd.ShardID,
+			"blockHash": br.Block.Hash,
+			"t":         time.Now().UnixNano(),
+		},
+	})
 
 	func() {
 		nd.processingPoolLock.Lock()
@@ -298,19 +341,28 @@ func (nd *Node) handleReply(msg Msg) {
 		Body: csbr,
 	}
 
+	var shards []int
 	for shard := range csShards {
 		if shard == nd.ShardID {
 			continue
 		}
+		shards = append(shards, shard)
 
 		go func(shard int) {
 			tcpSend(nd.NodeAddrs[shard][0], csbrMsg)
 		}(shard)
 	}
+
+	if len(shards) > 0 {
+		log.Debug("node send crossshard block result")
+	}
 }
 
 func (nd *Node) handleCrossShard(msg Msg) {
 	csbr := msg.Body.(CrossShardBlockResult)
+
+	log.WithField("from", csbr.FromShard).Debug("node handle crossshard msg")
+
 	h := sha256.New()
 	gob.NewEncoder(h).Encode(csbr.Block)
 
@@ -319,6 +371,9 @@ func (nd *Node) handleCrossShard(msg Msg) {
 		panic(err)
 	}
 
+	now := time.Now().UnixNano()
+	avgTime := int64(0)
+	xTxNum := 0
 	func() {
 		nd.waitingPoolLock.Lock()
 		defer nd.waitingPoolLock.Unlock()
@@ -327,6 +382,8 @@ func (nd *Node) handleCrossShard(msg Msg) {
 
 		for _, tx := range csbr.Block.Txs {
 			if tx.IsSubTx {
+				avgTime += now - nd.waitingPool[string(tx.Hash)].InPoolTimestamp
+				xTxNum++
 				delete(nd.waitingPool, string(tx.Hash))
 				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
@@ -335,6 +392,17 @@ func (nd *Node) handleCrossShard(msg Msg) {
 			}
 		}
 	}()
+
+	go tcpSend(nd.CoorAddr, Msg{
+		Head: []string{"report", "crossshard"},
+		Body: log.Fields{
+			"shardID":   nd.ShardID,
+			"blockHash": csbr.Block.Hash,
+			"t":         time.Now().UnixNano(),
+			"avgTime":   avgTime,
+			"xTxNum":    xTxNum,
+		},
+	})
 }
 
 func (nd *Node) PackBlock() {
@@ -342,11 +410,18 @@ func (nd *Node) PackBlock() {
 		first := <-nd.packBlockChan
 
 		var txs []Tx
+		now := time.Now().UnixNano()
+		avgTime := int64(0)
+		xTxTime := int64(0)
+		nTxTime := int64(0)
 		if first {
 			txs = []Tx{}
 		} else {
 			for {
-				var txs []Tx
+				now = time.Now().UnixNano()
+				avgTime = int64(0)
+				xTxTime = int64(0)
+				nTxTime = int64(0)
 				func() {
 					nd.readyPoolLock.Lock()
 					defer nd.readyPoolLock.Unlock()
@@ -358,10 +433,15 @@ func (nd *Node) PackBlock() {
 						tx := txWithMetrics.Tx
 						txs = append(txs, *tx)
 						delete(nd.readyPool, k)
-						// TODO: Report
+						avgTime += now - txWithMetrics.InPoolTimestamp
+						if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+							xTxTime += now - txWithMetrics.InPoolTimestamp
+						} else {
+							nTxTime += now - txWithMetrics.InPoolTimestamp
+						}
 						nd.processingPool[k] = &TxWithMetrics{
 							Tx:              tx,
-							InPoolTimestamp: time.Now().UnixNano(),
+							InPoolTimestamp: now,
 						}
 						i += 1
 						if i >= nd.BlockSize {
@@ -377,8 +457,31 @@ func (nd *Node) PackBlock() {
 			}
 		}
 
+		log.WithField("txNum", len(txs)).Debug("node pack block")
+
 		block := Block{Txs: txs}
 		block.GenHash()
+
+		xTxNum := 0
+		for _, tx := range txs {
+			if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+				xTxNum++
+			}
+		}
+
+		go tcpSend(nd.CoorAddr, Msg{
+			Head: []string{"report", "packblock"},
+			Body: log.Fields{
+				"shardID":   nd.ShardID,
+				"txNum":     len(txs),
+				"xTxNum":    xTxNum,
+				"blockHash": block.Hash,
+				"t":         now,
+				"avgTime":   avgTime,
+				"xTxTime":   xTxTime,
+				"nTxTime":   nTxTime,
+			},
+		})
 
 		rMsg := pbft.Request{
 			Op:        block,
@@ -410,14 +513,46 @@ func (nd *Node) SendReady() {
 	})
 }
 
+func (nd *Node) ReportPoolSize() {
+	for {
+		time.Sleep(time.Millisecond * 100)
+		go func() {
+			nd.waitingPoolLock.Lock()
+			waitingPoolN := len(nd.waitingPool)
+			nd.waitingPoolLock.Unlock()
+			nd.readyPoolLock.Lock()
+			readyPoolN := len(nd.readyPool)
+			nd.readyPoolLock.Unlock()
+			nd.processingPoolLock.Lock()
+			processingPoolN := len(nd.processingPool)
+			nd.processingPoolLock.Unlock()
+			tcpSend(nd.CoorAddr, Msg{
+				Head: []string{"report", "poolsize"},
+				Body: log.Fields{
+					"shardID":         nd.ShardID,
+					"t":               time.Now().UnixNano(),
+					"waitingPoolN":    waitingPoolN,
+					"readyPoolN":      readyPoolN,
+					"processingPoolN": processingPoolN,
+				},
+			})
+		}()
+	}
+}
+
 func NewNode() *Node {
 	coorAddr := flag.String("coorAddr", "", "coordinator listen addr")
+	debug := flag.Bool("debug", false, "debug logging")
 	flag.Parse()
 
 	if *coorAddr == "" {
 		log.WithField("coorAddr", *coorAddr).Fatal("invalid commandline arg")
 	} else if !strings.Contains(*coorAddr, ":") {
 		*coorAddr += ":8000"
+	}
+
+	if *debug {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	configChan := make(chan *NodeConfig, 1)
@@ -432,12 +567,18 @@ func NewNode() *Node {
 
 	config := <-configChan
 
-	log.Info("node setup config ok")
+	log.WithFields(log.Fields{
+		"shardID":   config.ShardID,
+		"inShardID": config.InShardID,
+		"neighbors": config.NeighborIDs,
+	}).Info("node setup config ok")
 
 	replicaPubkeys := make([][]byte, len(config.NodeAddrs[0]))
 	for i, key := range config.NodePubKeys[config.ShardID] {
 		replicaPubkeys[i] = pbft.GobEnc(key)
 	}
+
+	os.Remove("db.sqlite")
 
 	db, err := sql.Open("sqlite3", "db.sqlite")
 	if err != nil {
@@ -471,6 +612,9 @@ func NewNode() *Node {
 					Block: block,
 					Sig:   sigShare,
 				}
+
+				log.Debug("node compute block result")
+
 				return state, br
 			},
 		},
@@ -479,6 +623,7 @@ func NewNode() *Node {
 				log.Fatal("no request forwarding to primary")
 			},
 			NetReply: func(client string, msg any) {
+				log.Debug("node send reply msg")
 				tcpSend(client, Msg{
 					Head: []string{"reply"},
 					Body: msg,
@@ -490,10 +635,13 @@ func NewNode() *Node {
 				switch msg.(type) {
 				case pbft.PrePrepareMsg:
 					msgType = "preprepare"
+					log.Debug("node send preprepare msg")
 				case pbft.WithSig[pbft.Prepare]:
 					msgType = "prepare"
+					log.Debug("node send prepare msg")
 				case pbft.WithSig[pbft.Commit]:
 					msgType = "commit"
+					log.Debug("node send commit msg")
 				}
 				m := Msg{
 					Head: []string{"gossip", gossipID, "pbft", msgType},
@@ -522,7 +670,9 @@ func NewNode() *Node {
 		},
 		PubkeyFuncSet: pbft.PubkeyFuncSet{
 			PubkeySign: func(digest []byte, privkey []byte) []byte {
-				sig, err := rsa.SignPKCS1v15(rand.Reader, config.PrivKey, crypto.SHA256, digest)
+				var key *rsa.PrivateKey
+				pbft.GobDec(privkey, &key)
+				sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest)
 				if err != nil {
 					panic(err)
 				}

@@ -23,3 +23,6 @@ go.work
 # IDE
 .vscode/
 .idea/
+
+# Config
+/config/

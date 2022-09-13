@@ -5,11 +5,16 @@ package mingchain
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/csv"
 	"encoding/gob"
+	"encoding/hex"
 	"flag"
+	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/myl7/tcrsa"
 	log "github.com/sirupsen/logrus"
@@ -17,6 +22,7 @@ import (
 
 type CoorNode struct {
 	PublicInfo
+	TxRate    int
 	resultLog *log.Logger
 	keys      []*rsa.PrivateKey
 	tcKeys    []TcKeys
@@ -66,7 +72,7 @@ func (nd *CoorNode) handleMsg(msg Msg) {
 }
 
 func (nd *CoorNode) handleReport(msg Msg) {
-	nd.resultLog.WithFields(msg.Body.(log.Fields)).Info("report")
+	nd.resultLog.WithFields(msg.Body.(log.Fields)).Info(strings.Join(msg.Head, " "))
 }
 
 func (nd *CoorNode) handleSetup(msg Msg) {
@@ -97,6 +103,7 @@ func (nd *CoorNode) SetupNodes() {
 	for i := 0; i < len(nd.NodeAddrs); i++ {
 		go func(i int) {
 			for j := 0; j < len(nd.NodeAddrs[0]); j++ {
+				neighbors := getNeighbors(len(nd.NodeAddrs[0]), j)
 				tcpSend(nd.NodeAddrs[i][j], Msg{
 					Head: []string{"setup", "config"},
 					Body: NodeConfig{
@@ -105,7 +112,7 @@ func (nd *CoorNode) SetupNodes() {
 						InShardID:   j,
 						PrivKey:     nd.keys[i*len(nd.NodeAddrs[0])+j],
 						TcKeyShare:  nd.tcKeys[i].Shares[j],
-						NeighborIDs: []int{}, // TODO
+						NeighborIDs: neighbors,
 					},
 				})
 			}
@@ -115,7 +122,98 @@ func (nd *CoorNode) SetupNodes() {
 }
 
 func (nd *CoorNode) sendTxs() {
-	// TODO
+	txFile, err := os.Open("tx.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer txFile.Close()
+
+	cr := csv.NewReader(txFile)
+
+	fields, err := cr.Read()
+	if err != nil {
+		panic(err)
+	}
+
+	var txs []Tx
+	for {
+		row, err := readCsvRow(cr, fields)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			panic(err)
+		}
+
+		fromShard, err := strconv.Atoi(row["fromShard"])
+		if err != nil {
+			panic(err)
+		}
+		toShard, err := strconv.Atoi(row["toShard"])
+		if err != nil {
+			panic(err)
+		}
+		txHash := strings.TrimPrefix(row["transactionHash"], "0x")
+		hash, err := hex.DecodeString(txHash)
+		if err != nil {
+			panic(err)
+		}
+
+		tx := Tx{
+			Hash:      hash,
+			FromShard: fromShard,
+			ToShard:   toShard,
+			IsSubTx:   false,
+		}
+		txs = append(txs, tx)
+	}
+
+	i := 0
+	for i < len(txs) {
+		// Counted by s
+		time.Sleep(1 * time.Second)
+
+		txToSent := make([][]Tx, len(nd.NodeAddrs))
+
+		for j := 0; j < nd.TxRate; j++ {
+			tx := txs[i]
+			txToSent[tx.ToShard] = append(txToSent[tx.ToShard], tx)
+
+			if tx.FromShard != tx.ToShard {
+				subTx := tx
+				subTx.IsSubTx = true
+				txToSent[subTx.FromShard] = append(txToSent[subTx.FromShard], subTx)
+			}
+
+			i++
+			if i >= len(txs) {
+				break
+			}
+		}
+
+		log.Info("coor send txs started")
+
+		go func() {
+			for shard, txs := range txToSent {
+				if len(txs) == 0 {
+					continue
+				}
+
+				msg := Msg{
+					Head: []string{"request"},
+					Body: txs,
+				}
+				tcpSend(nd.NodeAddrs[shard][0], msg)
+			}
+		}()
+	}
+
+	log.Info("coor sent txs ok")
+
+	for {
+		time.Sleep(60 * time.Second)
+	}
 }
 
 // Notice that this will access commandlne args
@@ -127,6 +225,8 @@ func NewCoorNode() *CoorNode {
 	blockInterval := flag.Int("blockInterval", 0, "block interval. unit: ms.")
 	coorAddr := flag.String("coorAddr", "", "coordinator listen addr")
 	resultFile := flag.String("resultFile", "", "result log file")
+	txRate := flag.Int("txRate", 0, "tx rate. unit: tx num/s.")
+	debug := flag.Bool("debug", false, "debug logging")
 	flag.Parse()
 
 	if *shardNum == 0 {
@@ -151,6 +251,13 @@ func NewCoorNode() *CoorNode {
 	}
 	if *resultFile == "" {
 		*resultFile = "result"
+	}
+	if *txRate == 0 {
+		log.WithField("txRate", *txRate).Fatal("invalid commandline arg")
+	}
+
+	if *debug {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	var keys []*rsa.PrivateKey
@@ -207,36 +314,9 @@ func NewCoorNode() *CoorNode {
 		}
 	}()
 
-	if len(tcKeys) > 0 && (tcKeys[0].K != *tcK || tcKeys[0].L != *inShardNum) {
-		tcKeys = nil
+	if tcKeys[0].K != *tcK || tcKeys[0].L != *inShardNum || len(tcKeys) != *shardNum {
+		log.Fatal("unmatched tc config file")
 	}
-
-	for i := len(tcKeys); i < *shardNum; i++ {
-		shares, meta, err := tcrsa.NewKey(2048, uint16(*tcK), uint16(*inShardNum), nil)
-		if err != nil {
-			panic(err)
-		}
-
-		tcKeys = append(tcKeys, TcKeys{
-			K:      *tcK,
-			L:      *inShardNum,
-			Shares: shares,
-			Meta:   meta,
-		})
-	}
-
-	func() {
-		f, err := os.Create("tc")
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-
-		err = gob.NewEncoder(f).Encode(tcKeys)
-		if err != nil {
-			panic(err)
-		}
-	}()
 
 	resultLog := log.New()
 	resultLog.SetFormatter(&log.JSONFormatter{})
@@ -257,13 +337,7 @@ func NewCoorNode() *CoorNode {
 	}
 
 	addrs := make([]string, *shardNum**inShardNum)
-	addrChan := make(chan string)
-	go func() {
-		for i := 0; i < *shardNum**inShardNum; i++ {
-			addr := <-addrChan
-			addrs[i] = addr
-		}
-	}()
+	addrChan := make(chan string, *shardNum**inShardNum)
 
 	tmpNd := &tmpCoorNode{
 		PublicInfo: publicInfo,
@@ -272,8 +346,9 @@ func NewCoorNode() *CoorNode {
 	}
 	tmpNd.listen()
 
-	if addrs[*shardNum**inShardNum-1] == "" {
-		log.Fatal("coor setup addr failed")
+	for i := 0; i < *shardNum**inShardNum; i++ {
+		addr := <-addrChan
+		addrs[i] = addr
 	}
 
 	for i := 0; i < *shardNum; i++ {
@@ -290,6 +365,7 @@ func NewCoorNode() *CoorNode {
 
 	return &CoorNode{
 		PublicInfo: publicInfo,
+		TxRate:     *txRate,
 		resultLog:  resultLog,
 		keys:       keys,
 		tcKeys:     tcKeys,
@@ -306,7 +382,6 @@ type TcKeys struct {
 
 type tmpCoorNode struct {
 	PublicInfo
-	// REFACTOR: Use chan buf to store
 	AddrChan chan string
 	N        int
 	i        int
@@ -347,6 +422,10 @@ func (nd *tmpCoorNode) listen() {
 				addr = host + ":8000"
 			}
 			nd.AddrChan <- addr
+			log.WithFields(log.Fields{
+				"i":    nd.i,
+				"addr": addr,
+			}).Debug("coor setup addr recv")
 			nd.i++
 			return nd.i >= nd.N
 		}()
