@@ -69,6 +69,7 @@ type Node struct {
 	replyMap           map[string][]*tcrsa.SigShare
 	repliedMap         map[string]bool
 	replyLock          sync.Mutex
+	deadChan           chan bool
 }
 
 func (nd *Node) Listen() {
@@ -196,8 +197,7 @@ func (nd *Node) handleRequest(msg Msg) {
 		if !nd.hasStarted {
 			nd.hasStarted = true
 			nd.packBlockChan <- true
-			// TODO: Debug first
-			// go nd.ReportPoolSize()
+			go nd.ReportPoolSize()
 		}
 	}()
 
@@ -395,19 +395,18 @@ func (nd *Node) handleCrossShard(msg Msg) {
 		defer nd.readyPoolLock.Unlock()
 
 		for _, tx := range csbr.Block.Txs {
-			if tx.IsSubTx {
+			if tx.IsSubTx && tx.ToShard == nd.ShardID {
 				xTxNum++
 				txMetrics, ok := nd.waitingPool[string(tx.Hash)]
 				if ok {
 					avgTime += now - txMetrics.InPoolTimestamp
 					delete(nd.waitingPool, string(tx.Hash))
+					nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
+						Tx:              txMetrics.Tx,
+						InPoolTimestamp: time.Now().UnixNano(),
+					}
 				} else {
 					nd.waitingPoolDone[string(tx.Hash)] = true
-				}
-
-				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
-					Tx:              &tx,
-					InPoolTimestamp: time.Now().UnixNano(),
 				}
 			}
 		}
@@ -426,6 +425,10 @@ func (nd *Node) handleCrossShard(msg Msg) {
 }
 
 func (nd *Node) PackBlock() {
+	if nd.InShardID != 0 {
+		return
+	}
+
 	for {
 		first := <-nd.packBlockChan
 
@@ -434,9 +437,7 @@ func (nd *Node) PackBlock() {
 		avgTime := int64(0)
 		xTxTime := int64(0)
 		nTxTime := int64(0)
-		if first {
-			txs = []Tx{}
-		} else {
+		if !first {
 			for {
 				now = time.Now().UnixNano()
 				avgTime = int64(0)
@@ -471,8 +472,12 @@ func (nd *Node) PackBlock() {
 				}()
 
 				if len(txs) > 0 {
+					nd.deadChan <- false
 					break
+				} else {
+					nd.deadChan <- true
 				}
+
 				time.Sleep(time.Millisecond * time.Duration(nd.BlockInterval))
 			}
 		}
@@ -539,8 +544,49 @@ func (nd *Node) SendReady() {
 }
 
 func (nd *Node) ReportPoolSize() {
+	dead := false
+	var deadLock sync.Mutex
+
+	// Brake
+	go func() {
+		for {
+			deadGot := <-nd.deadChan
+			if deadGot {
+				t := time.NewTimer(time.Second * 10)
+			L:
+				for {
+					select {
+					case deadGot = <-nd.deadChan:
+						if !deadGot {
+							break L
+						}
+					case <-t.C:
+						deadLock.Lock()
+						dead = true
+						deadLock.Unlock()
+						for {
+							// Consume all later dead
+							<-nd.deadChan
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	for {
-		time.Sleep(time.Millisecond * 100)
+		// Aviod collision
+		time.Sleep(time.Millisecond * 500)
+
+		deadGot := func() bool {
+			deadLock.Lock()
+			defer deadLock.Unlock()
+			return dead
+		}()
+		if deadGot {
+			break
+		}
+
 		go func() {
 			nd.waitingPoolLock.Lock()
 			waitingPoolN := len(nd.waitingPool)
@@ -562,6 +608,8 @@ func (nd *Node) ReportPoolSize() {
 				},
 			})
 		}()
+
+		time.Sleep(time.Millisecond * 500)
 	}
 }
 
@@ -728,6 +776,7 @@ func NewNode() *Node {
 		processingPool:  make(map[string]*TxWithMetrics),
 		replyMap:        make(map[string][]*tcrsa.SigShare),
 		repliedMap:      make(map[string]bool),
+		deadChan:        make(chan bool),
 	}
 }
 

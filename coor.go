@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/myl7/tcrsa"
@@ -22,11 +23,12 @@ import (
 
 type CoorNode struct {
 	PublicInfo
-	TxRate    int
-	resultLog *log.Logger
-	keys      []*rsa.PrivateKey
-	tcKeys    []TcKeys
-	nodeReady []bool
+	TxRate        int
+	resultLog     *log.Logger
+	keys          []*rsa.PrivateKey
+	tcKeys        []TcKeys
+	nodeReady     []bool
+	nodeReadyLock sync.Mutex
 }
 
 func (nd *CoorNode) Listen() {
@@ -85,6 +87,9 @@ func (nd *CoorNode) handleSetup(msg Msg) {
 }
 
 func (nd *CoorNode) handleSetupReady(msg Msg) {
+	nd.nodeReadyLock.Lock()
+	defer nd.nodeReadyLock.Unlock()
+
 	ready := msg.Body.(SetupReady)
 	nd.nodeReady[ready.ShardID*len(nd.NodeAddrs[0])+ready.InShardID] = true
 	done := true

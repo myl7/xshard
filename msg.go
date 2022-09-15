@@ -35,7 +35,13 @@ func (b *Block) GenHash() {
 
 	hashList := make([][]byte, len(b.Txs))
 	for i, tx := range b.Txs {
-		hashList[i] = tx.Hash
+		hashList[i] = make([]byte, len(tx.Hash)+1)
+		copy(hashList[i], tx.Hash)
+		if tx.IsSubTx {
+			hashList[i][len(tx.Hash)] = 1
+		} else {
+			hashList[i][len(tx.Hash)] = 0
+		}
 	}
 
 	tree, err := merkletree.New(hashList)
