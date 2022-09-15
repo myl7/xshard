@@ -204,7 +204,7 @@ func (nd *CoorNode) sendTxs() {
 					Head: []string{"request"},
 					Body: txs,
 				}
-				tcpSend(nd.NodeAddrs[shard][0], msg)
+				go tcpSend(nd.NodeAddrs[shard][0], msg)
 			}
 		}()
 	}

@@ -49,13 +49,10 @@ func readCsvRow(cr *csv.Reader, fields []string) (map[string]string, error) {
 }
 
 func getNeighbors(n int, i int) []int {
-	m := int(math.Log2(float64(n))) // Neighbor num
-	if m%2 != 0 {
-		m--
-	}
-	neighbors := make([]int, m)
-	for j := 0; j < m; j++ {
-		neighbors[j] = int(math.Abs(float64(int(math.Pow(2, float64(j))+float64(i))))) % n
+	m := int(math.Log2(float64(n)))
+	var neighbors []int
+	for j := 1; j <= m; j++ {
+		neighbors = append(neighbors, (int(math.Pow(2, float64(j)))-1+i)%n)
 	}
 	return neighbors
 }

@@ -60,6 +60,7 @@ type Node struct {
 	packBlockChan chan bool
 	// Lock them following the list order
 	waitingPool        map[string]*TxWithMetrics
+	waitingPoolDone    map[string]bool
 	waitingPoolLock    sync.Mutex
 	readyPool          map[string]*TxWithMetrics
 	readyPoolLock      sync.Mutex
@@ -195,6 +196,8 @@ func (nd *Node) handleRequest(msg Msg) {
 		if !nd.hasStarted {
 			nd.hasStarted = true
 			nd.packBlockChan <- true
+			// TODO: Debug first
+			// go nd.ReportPoolSize()
 		}
 	}()
 
@@ -218,15 +221,26 @@ func (nd *Node) handleRequest(msg Msg) {
 				log.WithField("tx", tx).Error("invalid tx")
 			}
 		} else if tx.ToShard == nd.ShardID {
-			func() {
-				nd.waitingPoolLock.Lock()
-				defer nd.waitingPoolLock.Unlock()
-
+			nd.waitingPoolLock.Lock()
+			_, ok := nd.waitingPoolDone[string(tx.Hash)]
+			if !ok {
 				nd.waitingPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
 					InPoolTimestamp: time.Now().UnixNano(),
 				}
-			}()
+			} else {
+				delete(nd.waitingPoolDone, string(tx.Hash))
+			}
+			nd.waitingPoolLock.Unlock()
+
+			if ok {
+				nd.readyPoolLock.Lock()
+				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
+					Tx:              &tx,
+					InPoolTimestamp: time.Now().UnixNano(),
+				}
+				nd.readyPoolLock.Unlock()
+			}
 		} else {
 			log.WithField("tx", tx).Error("invalid tx")
 		}
@@ -382,9 +396,15 @@ func (nd *Node) handleCrossShard(msg Msg) {
 
 		for _, tx := range csbr.Block.Txs {
 			if tx.IsSubTx {
-				avgTime += now - nd.waitingPool[string(tx.Hash)].InPoolTimestamp
 				xTxNum++
-				delete(nd.waitingPool, string(tx.Hash))
+				txMetrics, ok := nd.waitingPool[string(tx.Hash)]
+				if ok {
+					avgTime += now - txMetrics.InPoolTimestamp
+					delete(nd.waitingPool, string(tx.Hash))
+				} else {
+					nd.waitingPoolDone[string(tx.Hash)] = true
+				}
+
 				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
 					InPoolTimestamp: time.Now().UnixNano(),
@@ -462,8 +482,12 @@ func (nd *Node) PackBlock() {
 		block := Block{Txs: txs}
 		block.GenHash()
 
+		rTxNum := 0
 		xTxNum := 0
 		for _, tx := range txs {
+			if !tx.IsSubTx {
+				rTxNum++
+			}
 			if !tx.IsSubTx && tx.FromShard != tx.ToShard {
 				xTxNum++
 			}
@@ -475,6 +499,7 @@ func (nd *Node) PackBlock() {
 				"shardID":   nd.ShardID,
 				"txNum":     len(txs),
 				"xTxNum":    xTxNum,
+				"rTxNum":    rTxNum,
 				"blockHash": block.Hash,
 				"t":         now,
 				"avgTime":   avgTime,
@@ -693,15 +718,16 @@ func NewNode() *Node {
 	pbft.Init()
 
 	return &Node{
-		NodeConfig:     *config,
-		PBFT:           pbft,
-		gossipFwdedMap: make(map[string]bool),
-		packBlockChan:  make(chan bool),
-		waitingPool:    make(map[string]*TxWithMetrics),
-		readyPool:      make(map[string]*TxWithMetrics),
-		processingPool: make(map[string]*TxWithMetrics),
-		replyMap:       make(map[string][]*tcrsa.SigShare),
-		repliedMap:     make(map[string]bool),
+		NodeConfig:      *config,
+		PBFT:            pbft,
+		gossipFwdedMap:  make(map[string]bool),
+		packBlockChan:   make(chan bool),
+		waitingPool:     make(map[string]*TxWithMetrics),
+		waitingPoolDone: make(map[string]bool),
+		readyPool:       make(map[string]*TxWithMetrics),
+		processingPool:  make(map[string]*TxWithMetrics),
+		replyMap:        make(map[string][]*tcrsa.SigShare),
+		repliedMap:      make(map[string]bool),
 	}
 }
 

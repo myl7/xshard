@@ -22,5 +22,5 @@ wget -O /home/ubuntu/node https://mingchain.s3.amazonaws.com/node
 chmod a+x /home/ubuntu/node
 ulimit -n 65535
 sysctl -w net.ipv4.tcp_tw_reuse=1
-/home/ubuntu/node -coorAddr 52.1.252.8 &> /home/ubuntu/node.log
+/home/ubuntu/node -coorAddr 52.1.252.8 &> /home/ubuntu/log
 --//--
