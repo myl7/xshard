@@ -3,6 +3,7 @@ package mingchain
 import (
 	"encoding/gob"
 	"io"
+	"math/rand"
 
 	pbft "github.com/myl7/pbft/pkg"
 	"github.com/myl7/tcrsa"
@@ -29,11 +30,13 @@ type Block struct {
 }
 
 func (b *Block) GenHash() {
+	nonce := uint8(rand.Intn(256))
+
 	if len(b.Txs) == 0 {
 		return
 	}
 
-	hashList := make([][]byte, len(b.Txs))
+	hashList := make([][]byte, len(b.Txs)+1)
 	for i, tx := range b.Txs {
 		hashList[i] = make([]byte, len(tx.Hash)+1)
 		copy(hashList[i], tx.Hash)
@@ -43,6 +46,7 @@ func (b *Block) GenHash() {
 			hashList[i][len(tx.Hash)] = 0
 		}
 	}
+	hashList[len(b.Txs)] = []byte{nonce}
 
 	tree, err := merkletree.New(hashList)
 	if err != nil {

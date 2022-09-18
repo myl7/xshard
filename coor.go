@@ -109,7 +109,7 @@ func (nd *CoorNode) SetupNodes() {
 		go func(i int) {
 			for j := 0; j < len(nd.NodeAddrs[0]); j++ {
 				neighbors := getNeighbors(len(nd.NodeAddrs[0]), j)
-				tcpSend(nd.NodeAddrs[i][j], Msg{
+				go tcpSendRetry(nd.NodeAddrs[i][j], Msg{
 					Head: []string{"setup", "config"},
 					Body: NodeConfig{
 						PublicInfo:  nd.PublicInfo,
@@ -119,7 +119,7 @@ func (nd *CoorNode) SetupNodes() {
 						TcKeyShare:  nd.tcKeys[i].Shares[j],
 						NeighborIDs: neighbors,
 					},
-				})
+				}, 100)
 			}
 			log.WithField("shardID", i).Info("coor setup config ok")
 		}(i)
@@ -319,8 +319,11 @@ func NewCoorNode() *CoorNode {
 		}
 	}()
 
-	if tcKeys[0].K != *tcK || tcKeys[0].L != *inShardNum || len(tcKeys) != *shardNum {
+	if tcKeys[0].K != *tcK || tcKeys[0].L != *inShardNum || len(tcKeys) < *shardNum {
 		log.Fatal("unmatched tc config file")
+	}
+	if len(tcKeys) > *shardNum {
+		tcKeys = tcKeys[:*shardNum]
 	}
 
 	resultLog := log.New()

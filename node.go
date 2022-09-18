@@ -222,18 +222,18 @@ func (nd *Node) handleRequest(msg Msg) {
 			}
 		} else if tx.ToShard == nd.ShardID {
 			nd.waitingPoolLock.Lock()
-			_, ok := nd.waitingPoolDone[string(tx.Hash)]
-			if !ok {
+			done := nd.waitingPoolDone[string(tx.Hash)]
+			if done {
+				delete(nd.waitingPoolDone, string(tx.Hash))
+			} else {
 				nd.waitingPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
 					InPoolTimestamp: time.Now().UnixNano(),
 				}
-			} else {
-				delete(nd.waitingPoolDone, string(tx.Hash))
 			}
 			nd.waitingPoolLock.Unlock()
 
-			if ok {
+			if done {
 				nd.readyPoolLock.Lock()
 				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
@@ -385,29 +385,38 @@ func (nd *Node) handleCrossShard(msg Msg) {
 		panic(err)
 	}
 
-	now := time.Now().UnixNano()
-	avgTime := int64(0)
 	xTxNum := 0
+	var txWMList []*TxWithMetrics
 	func() {
 		nd.waitingPoolLock.Lock()
 		defer nd.waitingPoolLock.Unlock()
-		nd.readyPoolLock.Lock()
-		defer nd.readyPoolLock.Unlock()
 
 		for _, tx := range csbr.Block.Txs {
 			if tx.IsSubTx && tx.ToShard == nd.ShardID {
 				xTxNum++
-				txMetrics, ok := nd.waitingPool[string(tx.Hash)]
+				txWM, ok := nd.waitingPool[string(tx.Hash)]
 				if ok {
-					avgTime += now - txMetrics.InPoolTimestamp
-					delete(nd.waitingPool, string(tx.Hash))
-					nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
-						Tx:              txMetrics.Tx,
-						InPoolTimestamp: time.Now().UnixNano(),
-					}
+					txWMList = append(txWMList, txWM)
 				} else {
 					nd.waitingPoolDone[string(tx.Hash)] = true
 				}
+				delete(nd.waitingPool, string(tx.Hash))
+			}
+		}
+	}()
+
+	now := time.Now().UnixNano()
+	avgTime := int64(0)
+	func() {
+		nd.readyPoolLock.Lock()
+		defer nd.readyPoolLock.Unlock()
+
+		for _, txWM := range txWMList {
+			tx := txWM.Tx
+			avgTime += now - txWM.InPoolTimestamp
+			nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
+				Tx:              tx,
+				InPoolTimestamp: time.Now().UnixNano(),
 			}
 		}
 	}()
@@ -432,38 +441,17 @@ func (nd *Node) PackBlock() {
 	for {
 		first := <-nd.packBlockChan
 
-		var txs []Tx
-		now := time.Now().UnixNano()
-		avgTime := int64(0)
-		xTxTime := int64(0)
-		nTxTime := int64(0)
+		var txWMList []*TxWithMetrics
 		if !first {
 			for {
-				now = time.Now().UnixNano()
-				avgTime = int64(0)
-				xTxTime = int64(0)
-				nTxTime = int64(0)
 				func() {
 					nd.readyPoolLock.Lock()
 					defer nd.readyPoolLock.Unlock()
-					nd.processingPoolLock.Lock()
-					defer nd.processingPoolLock.Unlock()
 
 					i := 0
-					for k, txWithMetrics := range nd.readyPool {
-						tx := txWithMetrics.Tx
-						txs = append(txs, *tx)
+					for k, txWM := range nd.readyPool {
+						txWMList = append(txWMList, txWM)
 						delete(nd.readyPool, k)
-						avgTime += now - txWithMetrics.InPoolTimestamp
-						if !tx.IsSubTx && tx.FromShard != tx.ToShard {
-							xTxTime += now - txWithMetrics.InPoolTimestamp
-						} else {
-							nTxTime += now - txWithMetrics.InPoolTimestamp
-						}
-						nd.processingPool[k] = &TxWithMetrics{
-							Tx:              tx,
-							InPoolTimestamp: now,
-						}
 						i += 1
 						if i >= nd.BlockSize {
 							break
@@ -471,7 +459,7 @@ func (nd *Node) PackBlock() {
 					}
 				}()
 
-				if len(txs) > 0 {
+				if len(txWMList) > 0 {
 					nd.deadChan <- false
 					break
 				} else {
@@ -480,6 +468,34 @@ func (nd *Node) PackBlock() {
 
 				time.Sleep(time.Millisecond * time.Duration(nd.BlockInterval))
 			}
+		}
+
+		now := time.Now().UnixNano()
+		avgTime := int64(0)
+		xTxTime := int64(0)
+		nTxTime := int64(0)
+		func() {
+			nd.processingPoolLock.Lock()
+			defer nd.processingPoolLock.Unlock()
+
+			for _, txWM := range txWMList {
+				tx := txWM.Tx
+				avgTime += now - txWM.InPoolTimestamp
+				if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+					xTxTime += now - txWM.InPoolTimestamp
+				} else {
+					nTxTime += now - txWM.InPoolTimestamp
+				}
+				nd.processingPool[string(tx.Hash)] = &TxWithMetrics{
+					Tx:              tx,
+					InPoolTimestamp: now,
+				}
+			}
+		}()
+
+		var txs []Tx
+		for _, txWM := range txWMList {
+			txs = append(txs, *txWM.Tx)
 		}
 
 		log.WithField("txNum", len(txs)).Debug("node pack block")
@@ -791,26 +807,33 @@ func (nd *tmpNode) listen() {
 	}
 	defer l.Close()
 
-	c, err := l.Accept()
-	if err != nil {
-		panic(err)
-	}
-	defer c.Close()
+	for {
+		done := func() bool {
+			c, err := l.Accept()
+			if err != nil {
+				panic(err)
+			}
+			defer c.Close()
 
-	d := gob.NewDecoder(c)
-	var msg Msg
-	err = d.Decode(&msg)
-	if err != nil {
-		// There will be wired spiders following the route to access the listener
-		log.WithField("remoteAddr", c.RemoteAddr()).Warn("invalid client")
-		return
-	}
+			d := gob.NewDecoder(c)
+			var msg Msg
+			err = d.Decode(&msg)
+			if err != nil {
+				// There will be wired spiders following the route to access the listener
+				log.WithField("remoteAddr", c.RemoteAddr()).Warn("invalid client")
+				return false
+			}
 
-	if msg.Head[0] != "setup" || msg.Head[1] != "config" {
-		log.WithField("head", msg.Head).Warn("invalid setup config msg")
-		return
-	}
+			if msg.Head[0] != "setup" || msg.Head[1] != "config" {
+				log.WithField("head", msg.Head).Fatal("invalid setup config msg")
+			}
 
-	config := msg.Body.(NodeConfig)
-	nd.configChan <- &config
+			config := msg.Body.(NodeConfig)
+			nd.configChan <- &config
+			return true
+		}()
+		if done {
+			break
+		}
+	}
 }

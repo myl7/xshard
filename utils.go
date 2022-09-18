@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"io"
 	"math"
+	"math/rand"
 	"net"
 	"strings"
 	"time"
@@ -29,6 +30,32 @@ func tcpSend(addr string, msg Msg) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+const tcpSendRetryIntervalMax = 10
+
+func tcpSendRetry(addr string, msg Msg, retry int) {
+	var err error
+	for i := 0; i < retry; i++ {
+		time.Sleep(tcpSendManualDelay)
+
+		var conn net.Conn
+		conn, err = net.Dial("tcp", addr)
+		if err != nil {
+			time.Sleep(time.Second * time.Duration(rand.Intn(tcpSendRetryIntervalMax)+1))
+			continue
+		}
+		defer conn.Close()
+
+		err = gob.NewEncoder(conn).Encode(msg)
+		if err != nil {
+			panic(err)
+		}
+
+		return
+	}
+
+	panic(err)
 }
 
 func readCsvRow(cr *csv.Reader, fields []string) (map[string]string, error) {
