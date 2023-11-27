@@ -17,6 +17,9 @@ func getListenAddr(addr string) string {
 
 const tcpSendManualDelay = time.Millisecond * 100
 
+// We should indeed use gRPC, but at that time I have not got familiar with it.
+// We do observe connection jamming in the experiment.
+// Sometimes it is a problem (too many retries) but 10 max retries is enough at most time.
 func tcpSend(addr string, msg Msg) {
 	time.Sleep(tcpSendManualDelay)
 
