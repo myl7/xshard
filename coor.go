@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -166,10 +167,10 @@ func (nd *CoorNode) sendTxs() {
 		}
 
 		tx := Tx{
-			Hash:      hash,
-			FromShard: fromShard,
-			ToShard:   toShard,
-			IsSubTx:   false,
+			Hash:       hash,
+			FromShards: []int{fromShard},
+			ToShards:   []int{toShard},
+			IsSubTx:    false,
 		}
 		txs = append(txs, tx)
 	}
@@ -183,12 +184,17 @@ func (nd *CoorNode) sendTxs() {
 
 		for j := 0; j < nd.TxRate; j++ {
 			tx := txs[i]
-			txToSent[tx.ToShard] = append(txToSent[tx.ToShard], tx)
 
-			if tx.FromShard != tx.ToShard {
-				subTx := tx
-				subTx.IsSubTx = true
-				txToSent[subTx.FromShard] = append(txToSent[subTx.FromShard], subTx)
+			for _, shard := range tx.FromShards {
+				txToSent[shard] = append(txToSent[shard], tx)
+			}
+
+			subTx := tx
+			subTx.IsSubTx = true
+			for _, shard := range tx.ToShards {
+				if !slices.Contains(tx.FromShards, shard) {
+					txToSent[shard] = append(txToSent[shard], subTx)
+				}
 			}
 
 			i++

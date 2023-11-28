@@ -16,12 +16,14 @@ type Msg struct {
 	Body any
 }
 
+// Since we use Ethereum real data, it is always SISO, meaning `FromShard` and `ToShard` always have only one element.
+// But as we declare MIMO in the paper, we will handle them like that.
 type Tx struct {
-	Hash      []byte
-	FromShard int
-	ToShard   int
-	IsSubTx   bool
-	Extra     []byte
+	Hash       []byte
+	FromShards []int
+	ToShards   []int
+	IsSubTx    bool
+	Extra      []byte
 }
 
 type Block struct {

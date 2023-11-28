@@ -10,6 +10,7 @@ import (
 	"flag"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -206,8 +207,8 @@ func (nd *Node) handleRequest(msg Msg) {
 	log.WithField("txNum", len(txs)).Debug("node handle request msg")
 
 	for _, tx := range txs {
-		if tx.FromShard == nd.ShardID {
-			if tx.ToShard == nd.ShardID || tx.IsSubTx {
+		if slices.Contains(tx.FromShards, nd.ShardID) {
+			if slices.Contains(tx.ToShards, nd.ShardID) || tx.IsSubTx {
 				func() {
 					nd.readyPoolLock.Lock()
 					defer nd.readyPoolLock.Unlock()
@@ -220,7 +221,7 @@ func (nd *Node) handleRequest(msg Msg) {
 			} else {
 				log.WithField("tx", tx).Error("invalid tx")
 			}
-		} else if tx.ToShard == nd.ShardID {
+		} else if slices.Contains(tx.ToShards, nd.ShardID) {
 			nd.waitingPoolLock.Lock()
 			done := nd.waitingPoolDone[string(tx.Hash)]
 			if done {
@@ -324,7 +325,9 @@ func (nd *Node) handleReply(msg Msg) {
 	csShards := make(map[int]bool)
 	for _, tx := range br.Block.Txs {
 		if tx.IsSubTx {
-			csShards[tx.ToShard] = true
+			for _, shard := range tx.ToShards {
+				csShards[shard] = true
+			}
 		}
 	}
 
@@ -392,7 +395,7 @@ func (nd *Node) handleCrossShard(msg Msg) {
 		defer nd.waitingPoolLock.Unlock()
 
 		for _, tx := range csbr.Block.Txs {
-			if tx.IsSubTx && tx.ToShard == nd.ShardID {
+			if tx.IsSubTx && slices.Contains(tx.ToShards, nd.ShardID) {
 				xTxNum++
 				txWM, ok := nd.waitingPool[string(tx.Hash)]
 				if ok {
@@ -481,7 +484,7 @@ func (nd *Node) PackBlock() {
 			for _, txWM := range txWMList {
 				tx := txWM.Tx
 				avgTime += now - txWM.InPoolTimestamp
-				if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+				if !tx.IsSubTx && !slices.Contains(tx.FromShards, nd.ShardID) {
 					xTxTime += now - txWM.InPoolTimestamp
 				} else {
 					nTxTime += now - txWM.InPoolTimestamp
@@ -509,7 +512,7 @@ func (nd *Node) PackBlock() {
 			if !tx.IsSubTx {
 				rTxNum++
 			}
-			if !tx.IsSubTx && tx.FromShard != tx.ToShard {
+			if !tx.IsSubTx && !slices.Contains(tx.FromShards, nd.ShardID) {
 				xTxNum++
 			}
 		}
