@@ -303,24 +303,30 @@ func (nd *Node) handleReply(msg Msg) {
 
 	// No need to store the blockchain since we do not use it
 
-	go tcpSend(nd.CoorAddr, Msg{
-		Head: []string{"report", "chain"},
-		Body: log.Fields{
-			"shardID":   nd.ShardID,
-			"blockHash": br.Block.Hash,
-			"t":         time.Now().UnixNano(),
-		},
-	})
-
+	txTotalTimeInProcessingPool := int64(0)
+	now := time.Now().UnixNano()
 	func() {
 		nd.processingPoolLock.Lock()
 		defer nd.processingPoolLock.Unlock()
 
 		for _, tx := range br.Block.Txs {
+			txWM := nd.processingPool[string(tx.Hash)]
+			txTotalTimeInProcessingPool += now - txWM.InPoolTimestamp
 			delete(nd.processingPool, string(tx.Hash))
 		}
 	}()
 	nd.packBlockChan <- false
+
+	go tcpSend(nd.CoorAddr, Msg{
+		Head: []string{"report", "chain"},
+		Body: log.Fields{
+			"shardID":                     nd.ShardID,
+			"blockHash":                   br.Block.Hash,
+			"t":                           time.Now().UnixNano(),
+			"txn":                         len(br.Block.Txs),
+			"txTotalTimeInProcessingPool": txTotalTimeInProcessingPool,
+		},
+	})
 
 	csShards := make(map[int]bool)
 	for _, tx := range br.Block.Txs {
