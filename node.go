@@ -222,9 +222,11 @@ func (nd *Node) handleRequest(msg Msg) {
 				log.WithField("tx", tx).Error("invalid tx")
 			}
 		} else if slices.Contains(tx.ToShards, nd.ShardID) {
+			var fwdedInPoolTimestamp int64
 			nd.waitingPoolLock.Lock()
 			done := nd.waitingPoolDone[string(tx.Hash)]
 			if done {
+				fwdedInPoolTimestamp = nd.waitingPool[string(tx.Hash)].InPoolTimestamp
 				delete(nd.waitingPoolDone, string(tx.Hash))
 			} else {
 				nd.waitingPool[string(tx.Hash)] = &TxWithMetrics{
@@ -238,7 +240,7 @@ func (nd *Node) handleRequest(msg Msg) {
 				nd.readyPoolLock.Lock()
 				nd.readyPool[string(tx.Hash)] = &TxWithMetrics{
 					Tx:              &tx,
-					InPoolTimestamp: time.Now().UnixNano(),
+					InPoolTimestamp: fwdedInPoolTimestamp,
 				}
 				nd.readyPoolLock.Unlock()
 			}
