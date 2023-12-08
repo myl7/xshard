@@ -46,6 +46,6 @@ tcK := flag.Int("tcK", 0, "threshold of tcrsa. at least half of in-shard node nu
 
 After setting up the coordinator, now you can start the nodes to get the configuration from the coordinator and wait for incoming transactions.
 We do the evaluation on AWS with hundreds of nodes.
-To deploy the compiled `node` program and automatically start it, we firstly serve the compile executable on the AWS S3.
+To deploy the compiled `node` program and automatically start it, we firstly serve the compiled executable on the AWS S3.
 Then we use cloud-init to automatically start all `node` programs.
 The cloud-init config is at `user-data.sh` and should be put in the "User Data" box of the AWS EC2 instance creation page.
