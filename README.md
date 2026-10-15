@@ -14,12 +14,14 @@ go build ./...
 To install the released commands into your Go binary directory:
 
 ```sh
-go install github.com/myl7/xshard/cmd/...@v0.3.0
+go install github.com/myl7/xshard/cmd/...@v0.3.1
 ```
 
-Library users should import `github.com/myl7/xshard`; its package name remains
-`mingchain`. This replaces the old `github.com/myl7/mingchain` import path.
-Existing gob message type names are retained for compatibility with earlier nodes.
+Library users should import `github.com/myl7/xshard`; from v0.3.1 onward, the
+package name is `xshard`. Version v0.3.0 uses `mingchain`. This replaces the old `github.com/myl7/mingchain` import path.
+Callers using the former default package identifier `mingchain` should use
+`xshard` or explicitly alias the import as `mingchain`. Existing gob message
+type names are retained for compatibility with earlier nodes.
 
 This is a typical golang project following the [standard layout].
 Folders in `cmd` can be compiled to executables.
