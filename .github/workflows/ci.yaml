@@ -1,0 +1,28 @@
+name: Go
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: off
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26.9', '1.27.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -timeout=10m ./...
+      - run: go test -tags=integration -race -run '^TestGossipPBFTCluster$' -timeout=5m .
