@@ -660,12 +660,9 @@ func NewNode() *Node {
 
 	configChan := make(chan *NodeConfig, 1)
 	tmpNd := &tmpNode{
+		coorAddr:   *coorAddr,
 		configChan: configChan,
 	}
-	go tcpSend(*coorAddr, Msg{
-		Head: []string{"setup", "addr"},
-		Body: "",
-	})
 	tmpNd.listen()
 
 	config := <-configChan
@@ -811,6 +808,7 @@ func NewNode() *Node {
 }
 
 type tmpNode struct {
+	coorAddr   string
 	configChan chan *NodeConfig
 }
 
@@ -820,6 +818,11 @@ func (nd *tmpNode) listen() {
 		panic(err)
 	}
 	defer l.Close()
+
+	go tcpSend(nd.coorAddr, Msg{
+		Head: []string{"setup", "addr"},
+		Body: "",
+	})
 
 	for {
 		done := func() bool {
