@@ -49,3 +49,23 @@ We do the evaluation on AWS with hundreds of nodes.
 To deploy the compiled `node` program and automatically start it, we firstly serve the compiled executable on the AWS S3.
 Then we use cloud-init to automatically start all `node` programs.
 The cloud-init config is at `user-data.sh` and should be put in the "User Data" box of the AWS EC2 instance creation page.
+
+## Go maintenance checks
+
+CI builds, vets, and runs the existing tests on Go 1.27.2 and Go 1.26.9.
+Go 1.27.2 is recommended for reproduction; the existing module requirements
+and Go directive are preserved:
+
+```sh
+go build ./...
+go vet ./...
+go test -race -timeout=10m ./...
+go test -tags=integration -race -run '^TestGossipPBFTCluster$' -timeout=5m .
+```
+
+The integration command exercises the existing four-replica gossip/PBFT fixture.
+It covers intra-shard processing and bypasses the coordinator and block packing.
+These checks do not measure paper benchmark performance. Reproducing published
+measurements requires the original toolchain and experimental environment.
+
+The build requires CGO and a C compiler for the existing SQLite dependency.
