@@ -1,6 +1,6 @@
 package main
 
-import "github.com/myl7/mingchain"
+import "github.com/myl7/xshard"
 
 func main() {
 	nd := mingchain.NewCoorNode()
