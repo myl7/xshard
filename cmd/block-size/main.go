@@ -5,7 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 
-	"github.com/myl7/mingchain"
+	"github.com/myl7/xshard"
 )
 
 func main() {

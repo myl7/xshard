@@ -2,6 +2,25 @@
 
 ## Get Started
 
+The Go module is `github.com/myl7/xshard`. Clone the repository and build its
+packages and commands with Go and a C compiler (required by the SQLite dependency):
+
+```sh
+git clone https://github.com/myl7/xshard.git
+cd xshard
+go build ./...
+```
+
+To install the released commands into your Go binary directory:
+
+```sh
+go install github.com/myl7/xshard/cmd/...@v0.3.0
+```
+
+Library users should import `github.com/myl7/xshard`; its package name remains
+`mingchain`. This replaces the old `github.com/myl7/mingchain` import path.
+Existing gob message type names are retained for compatibility with earlier nodes.
+
 This is a typical golang project following the [standard layout].
 Folders in `cmd` can be compiled to executables.
 `block-size`, `comb-tc`, `gen-tc` are helper tools and `node`, `coor` are serving programs of a X-shard deployment.
@@ -53,8 +72,7 @@ The cloud-init config is at `user-data.sh` and should be put in the "User Data" 
 ## Go maintenance checks
 
 CI builds, vets, and runs the existing tests on Go 1.27.2 and Go 1.26.9.
-Go 1.27.2 is recommended for reproduction; the existing module requirements
-and Go directive are preserved:
+Go 1.27.2 is recommended for reproduction; the Go 1.25.0 directive is preserved:
 
 ```sh
 go build ./...
