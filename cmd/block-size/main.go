@@ -10,15 +10,15 @@ import (
 
 func main() {
 	hash, _ := hex.DecodeString("6509fae57546a5d1cb13a8cd05d93ecc5fc7d0e28d9567082985bfebc3db68a2")
-	tx := mingchain.Tx{
+	tx := xshard.Tx{
 		Hash:       hash,
 		FromShards: []int{0},
 		ToShards:   []int{1},
 		IsSubTx:    false,
 	}
-	blk := mingchain.Block{}
+	blk := xshard.Block{}
 	for i := 0; i < 100; i++ {
-		blk.Txs = append(blk.Txs, mingchain.Tx{
+		blk.Txs = append(blk.Txs, xshard.Tx{
 			Hash:       hash,
 			FromShards: []int{1},
 			ToShards:   []int{2},

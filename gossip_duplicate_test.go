@@ -1,4 +1,4 @@
-package mingchain
+package xshard
 
 import "testing"
 
