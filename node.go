@@ -135,15 +135,18 @@ func (nd *Node) handleMsg(msg Msg, c net.Conn) {
 
 func (nd *Node) handleGossip(msg Msg, c net.Conn) {
 	id := msg.Head[1]
-	func() {
+	duplicate := func() bool {
 		nd.gossipFwdedMapLock.Lock()
 		defer nd.gossipFwdedMapLock.Unlock()
-
 		if nd.gossipFwdedMap[id] {
-			return
+			return true
 		}
 		nd.gossipFwdedMap[id] = true
+		return false
 	}()
+	if duplicate {
+		return
+	}
 
 	go func() {
 		// Forward
