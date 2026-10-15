@@ -148,14 +148,14 @@ func (nd *Node) handleGossip(msg Msg, c net.Conn) {
 		return
 	}
 
-	go func() {
+	go func(msg Msg) {
 		// Forward
 		for _, nid := range nd.NeighborIDs {
 			if !checkHostEq(nd.NodeAddrs[nd.ShardID][nid], c.RemoteAddr().String()) {
 				tcpSend(nd.NodeAddrs[nd.ShardID][nid], msg)
 			}
 		}
-	}()
+	}(msg)
 
 	msg.Head = msg.Head[2:]
 	nd.handleMsg(msg, c)
