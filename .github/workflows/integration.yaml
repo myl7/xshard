@@ -1,0 +1,22 @@
+name: Integration
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gossip-pbft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [oldstable, stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - run: go test -tags=integration -race -run '^TestGossipPBFTCluster$' -timeout=5m .
